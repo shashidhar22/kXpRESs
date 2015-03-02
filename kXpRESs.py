@@ -340,7 +340,7 @@ def kxpress(refer, seqfile, loglevel,klen,output,mode,index,db_type,type,seq_len
             seq_len = len(fastq_parser.readline()) -1
             fastq_parser.close()
             logging.info('Kmerizing seqeunce files')
-            kmerize = subprocess.Popen([kanalyze+'count','-m','dec','-d','8','-k',klen,
+            kmerize = subprocess.Popen([kanalyze+'count','-m','dec','-d','4','-k',klen,
                                         '-f','fastq','-o',os.path.abspath(os.path.dirname(__file__))+'/tmp.kc',seqfile],
                                         stdout=subprocess.PIPE, shell=False)
             kmerize.wait();
@@ -358,18 +358,21 @@ def kxpress(refer, seqfile, loglevel,klen,output,mode,index,db_type,type,seq_len
         while kmer_csv:
             if int(kmer[1]) > 3:
                 kmer_count += 1
-                if len(kc_chunk) <= 20000000:
+                if len(kc_chunk) <= 10000000:
                     kc_chunk[int(kmer[0])] = int(kmer[1])
                     try:
                         kmer = next(kmer_csv)
                     except StopIteration:
+                        logging.info('kmers sent :'+str(len(kc_chunk)))
                         express(kc_chunk,kmer_index)
                         break
                 else:
+                    logging.info('kmers sent :'+str(len(kc_chunk)))
                     express(kc_chunk,kmer_index)
                     kc_chunk = dict()
             else:
                 kmer = next(kmer_csv)
+        logging.info('total kmers' + str(kmer_count))
         #transcript_index, transcript_rescue, kmer_count = kmerge(kmer_index, kmer_file, transcript_order)
         logging.info('Merging complete')
         os.remove(kmer_file)
