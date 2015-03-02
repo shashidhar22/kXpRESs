@@ -32,37 +32,64 @@ import collections
 global kanalyze
 kanalyze = os.path.abspath(os.path.dirname(__file__))+'/kanalyze-0.9.7/'
 
+
+transcript_index = dict()
+transcript_rescue = dict()
+transcript_average = dict()
+
+def express(kc_chunk,index):
+    for lines in open(index):
+        line = lines.strip().split('\t')
+        if int(line[1]) == 1:
+            try:
+                if int(line[0]) in kc_chunk:
+                    transcript_index[int(line[2])] += kc_chunk[int(line[0])]
+                    transcript_average[int(line[2])] += 1
+                else:
+                    continue
+            except KeyError:
+                if int(line[0]) in kc_chunk:
+                    transcript_index[int(line[2])] = kc_chunk[int(line[0])]
+                    transcript_average[int(line[2])] = 1
+                else:
+                    continue
+        else:
+            if int(line[0]) in kc_chunk:
+                res_trans = [int(gene) for gene in line[2].split(',')]
+                transcript_rescue[int(line[0])] = [res_trans,kc_chunk[int(line[0])]]
+            else:
+                continue
+    return
+
 def get_next(iterator):
     try:
         return(next(iterator).strip().split('\t'))
     except StopIteration:
         return(None)
 
-def rescue(transcript_index,transcript_rescue,transcript_order):
+def rescue(transcript_index,transcript_rescue,transcript_order,transcript_average):
      logging.info('Rescue algorithm started')
      transcript_ec = dict()
      print(len(transcript_rescue))
      for count,kmers in enumerate(transcript_rescue):	#loop through all kmers that have more than one transcript index
          for indices in transcript_rescue[kmers][0]:	#loop through transcript index of kmer
              if transcript_rescue[kmers][1] > 0:	#check if k-mer count is greater than zero
-                 fin_range = list()	#final expression range list
                  try:
-                     expression_range = transcript_index[indices]	#initial expression range list
+                     opt = transcript_index[indices]/transcript_average[indices]
+                     transcript_average[indices] += 1
+                     transcript_index[indices] += opt
                  except KeyError:
-                     expression_range = [0]
-                 ini_mean = np.mean(expression_range)	#calculate initial mean
-                 opt = int(ini_mean)	#set initial optimum distribution of kmer to transcript as zero
-                 expression_range.append(opt)
-                 fin_range = expression_range
-                 transcript_index[indices] = fin_range
-                 transcript_ec[transcript_order[indices]] = fin_range	#at the end of optimization add error corrected range to transcript hash
+                     opt = transcript_rescue[kmers][1]/len(transcript_rescue[kmers][0])
+                     transcript_average[indices] = 1
+                     transcript_index[indices] = opt
+                 transcript_ec[transcript_order[indices]] = transcript_index[indices]	#at the end of optimization add error corrected range to transcript hash
                  transcript_rescue[kmers][1] -= opt	#reduce available kmer count
              else:
                  #logging.info(transcript_order[indices])
                  try:
                      transcript_ec[transcript_order[indices]] = transcript_index[indices]	#if kmer has already been distributed, maintain earlier distribution
                  except KeyError:
-                     transcript_ec[transcript_order[indices]] = [0]
+                     transcript_ec[transcript_order[indices]] = 0
      for genes in transcript_index:
          if transcript_order[genes] not in transcript_ec:
              transcript_ec[transcript_order[genes]] = transcript_index[genes]
@@ -273,12 +300,12 @@ def reporter(transcript_index,transcript_length,klen,output_file,seq_number,seq_
     logging.info('Generating report')
     output_csv = csv.writer(open(output_file,'w'),delimiter='\t')
     output_csv.writerow(['RefseqID','Length','Number of kmers aligned','KPKM','RPKM'])
-    for refseqs in transcript_index:
+    for refseqs in sorted(transcript_index):
         if refseqs != '' and transcript_length[refseqs] > int(klen):
             kpkm = 0
-            kpkm = sum(transcript_index[refseqs])/ float(float((transcript_length[refseqs]-int(klen)+1)/1000.0) * seq_number * seq_len)
+            kpkm = transcript_index[refseqs]/ float(float((transcript_length[refseqs]-int(klen)+1)/1000.0) * seq_number * seq_len)
             rpkm = kpkm / float(seq_len - int(klen) +1)
-            output_csv.writerow([refseqs, str(transcript_length[refseqs]),str(sum(transcript_index[refseqs])),str(kpkm),str(rpkm)])
+            output_csv.writerow([refseqs, str(transcript_length[refseqs]),str(transcript_index[refseqs]),str(kpkm),str(rpkm)])
         else:
             continue
     logging.info('Report generation complete')
@@ -324,9 +351,29 @@ def kxpress(refer, seqfile, loglevel,klen,output,mode,index,db_type,type,seq_len
         logging.info('Retriving index')
         kmer_index = glob.glob(index+'*.mkx')[0]
         logging.info('Merging transcritps and k-mers')
-        transcript_index, transcript_rescue, kmer_count = kmerge(kmer_index, kmer_file, transcript_order)
+        kmer_csv = csv.reader(open(kmer_file),delimiter='\t')
+        kmer = next(kmer_csv)
+        kmer_count = 0
+        kc_chunk = dict()
+        while kmer_csv:
+            if int(kmer[1]) > 3:
+                kmer_count += 1
+                if len(kc_chunk) <= 20000000:
+                    kc_chunk[int(kmer[0])] = int(kmer[1])
+                    try:
+                        kmer = next(kmer_csv)
+                    except StopIteration:
+                        express(kc_chunk,kmer_index)
+                        break
+                else:
+                    express(kc_chunk,kmer_index)
+                    kc_chunk = dict()
+            else:
+                kmer = next(kmer_csv)
+        #transcript_index, transcript_rescue, kmer_count = kmerge(kmer_index, kmer_file, transcript_order)
         logging.info('Merging complete')
-        rescue_expression = rescue(transcript_index, transcript_rescue,transcript_order)
+        os.remove(kmer_file)
+        rescue_expression = rescue(transcript_index, transcript_rescue,transcript_order,transcript_average)
         full_transcripts = 0
         incomplete_transcripts = 0
         unknown_kmers = 0
