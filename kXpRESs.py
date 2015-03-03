@@ -340,7 +340,7 @@ def kxpress(refer, seqfile, loglevel,klen,output,mode,index,db_type,type,seq_len
             seq_len = len(fastq_parser.readline()) -1
             fastq_parser.close()
             logging.info('Kmerizing seqeunce files')
-            kmerize = subprocess.Popen([kanalyze+'count','-m','dec','-d','4','-k',klen,
+            kmerize = subprocess.Popen([kanalyze+'count','-m','dec','-d','6','-k',klen,
                                         '-f','fastq','-o',os.path.abspath(os.path.dirname(__file__))+'/tmp.kc',seqfile],
                                         stdout=subprocess.PIPE, shell=False)
             kmerize.wait();
@@ -351,8 +351,8 @@ def kxpress(refer, seqfile, loglevel,klen,output,mode,index,db_type,type,seq_len
         logging.info('Retriving index')
         kmer_index = glob.glob(index+'*.mkx')[0]
         logging.info('Merging transcritps and k-mers')
-        kmer_csv = csv.reader(open(kmer_file),delimiter='\t')
-        kmer = next(kmer_csv)
+        kmer_csv = open(kmer_file)
+        kmer = next(kmer_csv).split('\t')
         kmer_count = 0
         kc_chunk = dict()
         while kmer_csv:
@@ -361,17 +361,18 @@ def kxpress(refer, seqfile, loglevel,klen,output,mode,index,db_type,type,seq_len
                 if len(kc_chunk) <= 10000000:
                     kc_chunk[int(kmer[0])] = int(kmer[1])
                     try:
-                        kmer = next(kmer_csv)
+                        kmer = next(kmer_csv).split('\t')
                     except StopIteration:
                         logging.info('kmers sent :'+str(len(kc_chunk)))
                         express(kc_chunk,kmer_index)
                         break
                 else:
+                    kc_chunk[int(kmer[0])] = int(kmer[1])
                     logging.info('kmers sent :'+str(len(kc_chunk)))
                     express(kc_chunk,kmer_index)
                     kc_chunk = dict()
             else:
-                kmer = next(kmer_csv)
+                kmer = next(kmer_csv).split('\t')
         logging.info('total kmers' + str(kmer_count))
         #transcript_index, transcript_rescue, kmer_count = kmerge(kmer_index, kmer_file, transcript_order)
         logging.info('Merging complete')
