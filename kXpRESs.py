@@ -38,19 +38,22 @@ transcript_rescue = dict()
 transcript_kpkm = dict()
 
 def express(kc_chunk,index,transcript_order,transcript_length,kmer_count,klen,seq_len):
+    transcript_count = dict()
     for lines in open(index):
         line = lines.strip().split('\t')
         if int(line[1]) == 1:
             try:
                 if int(line[0]) in kc_chunk:
                     transcript_index[int(line[2])] += kc_chunk[int(line[0])]
-                    transcript_kpkm[int(line[2])] = (transcript_index[int(line[2])]*10**9)/float((transcript_length[transcript_order[int(line[2])]] - klen + 1) * kmer_count * seq_len)
+                    transcript_count[int(line[2])] += int(klen)
+                    transcript_kpkm[int(line[2])] = (transcript_index[int(line[2])]*10**9)/float(( transcript_count[int(line[2])]- klen + 1) * kmer_count * seq_len)
                 else:
                     continue
             except KeyError:
                 if int(line[0]) in kc_chunk:
                     transcript_index[int(line[2])] = kc_chunk[int(line[0])]
-                    transcript_kpkm[int(line[2])] = (transcript_index[int(line[2])]*10**9)/float((transcript_length[transcript_order[int(line[2])]] - klen + 1) * kmer_count * seq_len)
+                    transcript_count[int(line[2])] = int(klen)
+                    transcript_kpkm[int(line[2])] = (transcript_index[int(line[2])]*10**9)/float((transcript_count[int(line[2])] - klen + 1) * kmer_count * seq_len)
                 else:
                     continue
         else:
