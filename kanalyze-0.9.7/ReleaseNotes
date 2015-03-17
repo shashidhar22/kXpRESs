@@ -1,3 +1,10 @@
+0.9.8
++ Added pre-count k-mer filtering to the count module.
++ Added --stdin, --stdout, and --input options to stream and count modules.
++ Added --lib and --liburl options to load libraries for dynamic classes.
++ Added timed put and take methods to BoundedQueue
+* Updated GUI components to make them more reusable.
+
 0.9.7
 + Added output format to the count module GUI.
 + Added convenience scripts to run the cite module.

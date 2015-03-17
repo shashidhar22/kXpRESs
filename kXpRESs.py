@@ -21,12 +21,15 @@ import argparse
 import subprocess
 import statistics as st
 import logging
+import tempfile
 from operator import itemgetter
 from pyfasta import Fasta
 from Bio import SeqIO
-from multiprocessing import Pool
+#from multiprocessing import Pool
+import multiprocessing
 from collections import Counter
 from itertools import repeat
+from natsort import natsorted
 import numpy as np
 import collections
 global kanalyze
@@ -52,23 +55,20 @@ def express(kc_chunk,index,transcript_order,transcript_length,kmer_count,klen,se
     transcript_count = dict()
     for lines in open(index):
         line = lines.strip().split('\t')
-        if int(line[1]) == 1:
-            try:
-                if int(line[0]) in kc_chunk:
-                    transcript_index[int(line[2])].append(kc_chunk[int(line[0])])
-                    transcript_count[int(line[2])] += int(klen)
-                    #transcript_kpkm[int(line[2])] = (sum(transcript_index[int(line[2])])*10**9)/float(( transcript_length[transcript_order[int(line[2])]] - klen + 1) * kmer_count * seq_len)
-                    transcript_kpkm[int(line[2])] = (sum(transcript_index[int(line[2])])*10**9)/float((transcript_count[int(line[2])] - klen + 1) * kmer_count * seq_len)
-                else:
-                    continue
-            except KeyError:
-                if int(line[0]) in kc_chunk:
-                    transcript_index[int(line[2])] = [kc_chunk[int(line[0])]]
-                    transcript_count[int(line[2])] = int(klen)
-                    #transcript_kpkm[int(line[2])] = (sum(transcript_index[int(line[2])])*10**9)/float((transcript_length[transcript_order[int(line[2])]] - klen + 1) * kmer_count * seq_len)
-                    transcript_kpkm[int(line[2])] = (sum(transcript_index[int(line[2])])*10**9)/float((transcript_count[int(line[2])] - klen + 1) * kmer_count * seq_len)
-                else:
-                    continue
+        if int(line[1]) <= 2:
+            for genes in line[2].split(','):
+                try:
+                    if int(line[0]) in kc_chunk:
+                        transcript_index[int(genes)].append(kc_chunk[int(line[0])])
+                        transcript_kpkm[int(genes)] = (sum(transcript_index[int(genes)])*10**9)/float(( transcript_length[transcript_order[int(genes)]] - klen + 1) * kmer_count * seq_len)
+                    else:
+                        continue
+                except KeyError:
+                    if int(line[0]) in kc_chunk:
+                        transcript_index[int(genes)] = [kc_chunk[int(line[0])]]
+                        transcript_kpkm[int(genes)] = (sum(transcript_index[int(genes)])*10**9)/float((transcript_length[transcript_order[int(genes)]] - klen + 1) * kmer_count * seq_len)
+                    else:
+                        continue
         else:
             if int(line[0]) in kc_chunk:
                 res_trans = [int(gene) for gene in line[2].split(',')]
@@ -91,30 +91,22 @@ def rescue(transcript_index,transcript_rescue,transcript_order,transcript_length
      print(len(transcript_rescue))
      for count,kmers in enumerate(transcript_rescue):	#loop through all kmers that have more than one transcript index
          if len(transcript_rescue[kmers][0]) <= 10:
-             gen = [transcript_order[val] for val in transcript_rescue[kmers][0]]
-             out.write(str(kmers)+'\t'+','.join(gen)+'\t'+str(transcript_rescue[kmers][1])+'\n')
+             #gen = [transcript_order[val] for val in transcript_rescue[kmers][0]]
+             #out.write(str(kmers)+'\t'+','.join(gen)+'\t'+str(transcript_rescue[kmers][1])+'\n')
              for indices in transcript_rescue[kmers][0]:	#loop through transcript index of kmer
                  try:
                      opt = transcript_rescue[kmers][1] * transcript_kpkm[indices]/sigma_kpkm
                      transcript_index[indices].append(opt)
-                     transcript_count[indices] += int(klen)
-                     #transcript_kpkm[indices] = (sum(transcript_index[indices])*10**9)/float((transcript_length[transcript_order[indices]] - klen + 1) * kmer_count * seq_len)
-                     transcript_kpkm[indices] = (sum(transcript_index[indices])*10**9)/float((transcript_count[indices] - klen + 1) * kmer_count * seq_len)
-                     sigma_kpkm = sum(transcript_kpkm.values())
+     #                transcript_kpkm[indices] = (sum(transcript_index[indices])*10**9)/float((transcript_length[transcript_order[indices]] - klen + 1) * kmer_count * seq_len)
+      #               sigma_kpkm = sum(transcript_kpkm.values())
                  except KeyError:
-                     #continue
-                     opt = transcript_rescue[kmers][1]
-                     transcript_index[indices] = [opt]
-                     transcript_count[indices] = int(klen)
-                     #transcript_kpkm[indices] = (sum(transcript_index[indices])*10**9)/float((transcript_length[transcript_order[indices]] - klen + 1) * kmer_count * seq_len)
-                     transcript_kpkm[indices] = (sum(transcript_index[indices])*10**9)/float((transcript_count[indices] - klen + 1) * kmer_count * seq_len)
-                     sigma_kpkm = sum(transcript_kpkm.values())
+                     continue
      logging.info('Number of transcripts rescued :' +str(len(transcript_index)))
      logging.info('Rescue completed')
      out.close()
      return(transcript_index)
 
-def merge(file1,file2,database,index,output):
+def merge(file1,file2,database,index,output,klen):
      result = csv.writer(open(output+str(index)+'.mkx','w'),delimiter='\t')
      with open(file1) as f1, open(file2) as f2:
          line1 = get_next(f1) 
@@ -139,22 +131,26 @@ def merge(file1,file2,database,index,output):
              line2 = get_next(f2) 
      return(output+str(index)+'.mkx')
 
-def lazy_function(fasta_file, chunk_size=1000):
+def lazy_function(fasta_file):
     """Function performs chunking of fasta file"""
     seq = True
-    while seq:
-        chunk = list()
-        while len(chunk) < chunk_size:
+    count = 0
+    chunk = list()
+    part = list()
+    while fasta_file:
+        if count < 200000:
             try:
                 seq = next(fasta_file)
-            except StopIteration:    #account for end of file
-                seq = None
-            if seq is None:
-               break
-            chunk.append([seq.id,str(seq.seq).upper()])
-        if chunk:
-            yield chunk
-    return
+                part.append([seq.id,str(seq.seq).upper()])
+                count += 1
+            except StopIteration:
+                chunk.append(part)
+                break
+        else:
+            count = 0 
+            chunk.append(part)
+            part = list()
+    return(chunk)
 
 def kmerize(arguments):
     """Implements a quick k-mer algorithm, to k-merize a given sequence and
@@ -201,13 +197,10 @@ def kmerize(arguments):
         logging.debug('Indexing '+header+ '; Line number '+str(tindex))
         transcript_order[tindex] = header         #transcript index to transcript name mapping
         transcript_length[header] = len(sequence) #transcript to transcript length mapping
-        count += 1
     temp_file = csv.writer(open(output+str(index)+'.tkx','w'),delimiter='\t')
-    for values in sorted(transcript_kmers.keys()):
-        #recurrence = Counter(transcript_kmers[values])   #to calculate the number of occurences of k-mers in trasncripts
-        #prior = [str(recurrence[gene]) for gene in transcript_kmers[values]]
+    for values in natsorted(transcript_kmers.keys()):
         temp_file.writerow([str(values),str(len(transcript_kmers[values])),str(','.join(str(x) for x in transcript_kmers[values]))])
-    return (transcript_order, transcript_length)
+    return (transcript_order, transcript_length,kmers)
 
 def probe_list(database, line_count, klen):
     """Method to create index from a given probe list"""
@@ -235,8 +228,10 @@ def probe_list(database, line_count, klen):
     logging.info('Reference indexing completed; %s kmers indexed to transcripts' %kmers)
     return (transcript_index, transcript_length)
 
+def start_kmerize():
+    print ('Starting', multiprocessing.current_process())
 #Create transcript index, maintains refseq id, kmer and kmer index
-def transcript_list(database, line_count,klen,output):
+def transcript_list(database, line_count,klen,output,threads,gene):
     """Method to create index from a fasta file"""
     logging.basicConfig(level=logging.INFO)
     transcript_length = dict()
@@ -244,32 +239,27 @@ def transcript_list(database, line_count,klen,output):
     transcript_order = dict()
     logging.info('Indexing reference fasta file')
     fasta_file = SeqIO.parse(open(database),'fasta')
-    sequences = 0
-    for lines in fasta_file:
-        sequences += 1
-    fasta_file = SeqIO.parse(open(database),'fasta')
-    fasta_handle = True
-    fasta_list = list()
+    fasta_list = lazy_function(fasta_file)
+    power = 5
     count = 0
-    power = int(math.log10(sequences/4)+1)
-    for fragments in lazy_function(fasta_file,int(sequences/4)):
-        fasta_list.append(fragments)
-    pool = Pool(5) 
-    results = pool.map(kmerize,zip(fasta_list,range(5),repeat(klen),
+    pool = multiprocessing.Pool(processes=int(threads), initializer=start_kmerize)
+    results = pool.map(kmerize,zip(fasta_list,range(len(fasta_list)),repeat(klen),
                        repeat(database),repeat(power),repeat(output)))
     for i in range(len(results)):            #redundancy to be rectified
         for k, v in results[i][1].items():
             transcript_length[k] = v
         for k, v in results[i][0].items():
             transcript_order[k] = v
-    logging.info('Number of transcripts read : %s ' %count)
+        count += results[i][2]
+    logging.info('Number of transcripts read : %s ' %len(transcript_length))
     logging.info('Reference indexing completed; \
-                  %s kmers indexed to transcripts' %len(transcript_order))
+                  %s kmers indexed to transcripts' %count)
     temp_list = glob.glob(output+'*.tkx')
+    print (temp_list)
     i = 0
     logging.info('Merging index files')
     while len(temp_list) > 1:
-        merged_file = merge(temp_list[0],temp_list[1],database, i,output)
+        merged_file = merge(temp_list[0],temp_list[1],database, i,output,klen)
         file = temp_list.pop(0)
         os.remove(file)
         file = temp_list.pop(0)
@@ -296,7 +286,7 @@ def reporter(transcript_index,transcript_length,klen,output_file,seq_number,seq_
     logging.info('Report generation complete')
     return
 
-def kxpress(refer, seqfile, loglevel,klen,output,mode,index,db_type,type,seq_len):
+def kxpress(refer, seqfile, loglevel,klen,output,mode,index,db_type,type,seq_len,threads):
     numeric_level = getattr(logging, loglevel.upper(), None)
     if not isinstance(numeric_level, int):
          raise ValueError('Invalid log level: %s' % loglevel)
@@ -304,11 +294,15 @@ def kxpress(refer, seqfile, loglevel,klen,output,mode,index,db_type,type,seq_len
     db_count = 0
     seq_file_count = 0
     if mode == 'index':
+        logging.info('Indexing started')
+        gene = list()
         if db_type == 'fasta':
             with open(refer) as dbfile:
                 for line in SeqIO.parse(dbfile,"fasta"):
                     db_count += 1
-            flanking_kmers = transcript_list(refer, db_count, int(klen),output)
+                    gene.append(line.id)
+            logging.info(str(db_count)+' transcripts found')
+            flanking_kmers = transcript_list(refer, db_count, int(klen),output,threads,gene)
             pickle.dump(flanking_kmers, open(output+'.kxp','wb'))
             logging.info('Indexing complete.')
         elif db_type == 'probes':
@@ -325,10 +319,11 @@ def kxpress(refer, seqfile, loglevel,klen,output,mode,index,db_type,type,seq_len
             seq_len = len(fastq_parser.readline()) -1
             fastq_parser.close()
             logging.info('Kmerizing seqeunce files')
-            kmerize = subprocess.Popen([kanalyze+'count','-r','-m','dec','-d','6','-k',klen,
-                                        '-f','fastq','-o',os.path.abspath(os.path.dirname(__file__))+'/tmp.kc',seqfile],
-                                        stdout=subprocess.PIPE, shell=False)
-            kmerize.wait();
+            kmer_file = os.path.abspath(glob.glob(index+'*.mkx')[0])
+            print(kmer_file)
+            #'--kmerfilter=kmerfile:'+kmer_file+';col=1'
+            kmerizes = subprocess.Popen([kanalyze+'count','-r','-m','dec','-d',threads,'-k',klen,'--kmerfilter=kmerfile:file='+kmer_file+';col=1','--countfilter=kmercount:c>3','-f','fastq','-o',os.path.abspath(os.path.dirname(__file__))+'/tmp.kc',seqfile], stdout=subprocess.PIPE, shell=False)
+            kmerizes.wait()
             logging.info('Kmers counted')
             kmer_file = os.path.abspath(os.path.dirname(__file__))+'/tmp.kc'
         elif type == 'kc':
@@ -338,31 +333,27 @@ def kxpress(refer, seqfile, loglevel,klen,output,mode,index,db_type,type,seq_len
         logging.info('Merging transcritps and k-mers')
         kmer_count = 0
         for lines in open(kmer_file):
-            if int(lines.split('\t')[1]) > 3:
-                kmer_count += 1
+            kmer_count += 1
         logging.info('Total kmers found : '+str(kmer_count))
         kmer_csv = open(kmer_file)
         kmer = next(kmer_csv).split('\t')
         kmer_count = 0
         kc_chunk = dict()
         while kmer_csv:
-            if int(kmer[1]) > 3:
-                kmer_count += 1
-                if len(kc_chunk) <= 10000000:
-                    kc_chunk[int(kmer[0])] = int(kmer[1])
-                    try:
-                        kmer = next(kmer_csv).split('\t')
-                    except StopIteration:
-#                        non_rescue(kc_chunk,kmer_index)
-                        express(kc_chunk,kmer_index,transcript_order,transcript_length,kmer_count,int(klen),seq_len)
-                        break
-                else:
-                    kc_chunk[int(kmer[0])] = int(kmer[1])
+            kmer_count += 1
+            if len(kc_chunk) <= 10000000:
+                kc_chunk[int(kmer[0])] = int(kmer[1])
+                try:
+                    kmer = next(kmer_csv).split('\t')
+                except StopIteration:
 #                    non_rescue(kc_chunk,kmer_index)
                     express(kc_chunk,kmer_index,transcript_order,transcript_length,kmer_count,int(klen),seq_len)
-                    kc_chunk = dict()
+                    break
             else:
-                kmer = next(kmer_csv).split('\t')
+                kc_chunk[int(kmer[0])] = int(kmer[1])
+#                non_rescue(kc_chunk,kmer_index)
+                express(kc_chunk,kmer_index,transcript_order,transcript_length,kmer_count,int(klen),seq_len)
+                kc_chunk = dict()
         logging.info('Merging complete')
         #os.remove(kmer_file)
         rescue_expression = rescue(transcript_index, transcript_rescue,transcript_order,transcript_length,transcript_kpkm,seq_len,kmer_count,int(klen))
@@ -391,6 +382,7 @@ if __name__ == '__main__':
     parser.add_argument('-i','--index',dest='index',type=str,help='Path to indexed file')
     parser.add_argument('-l','--log',type=str,default='info',choices=['info','debug','error'],help='Verbosity parameter')
     parser.add_argument('-s','--seqlen',type=int,default=36,help='Read length, must be provided when runnnig using kc file')
-    parser.add_argument('-v','--version',action='version',version='%(prog)s 0.9.0')
+    parser.add_argument('-v','--version',action='version',version='%(prog)s 0.9.2')
+    parser.add_argument('-n','--num_thread',dest='threads',type=str,default='2',help='Number of threads')
     args = parser.parse_args()
-    kxpress(args.refer, args.seqfile,args.log,args.klen,args.output,args.mode,args.index,args.db_type,args.file_type,args.seqlen)
+    kxpress(args.refer, args.seqfile,args.log,args.klen,args.output,args.mode,args.index,args.db_type,args.file_type,args.seqlen,args.threads)
