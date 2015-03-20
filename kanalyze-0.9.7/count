@@ -10,7 +10,7 @@ done
 DIR="$( cd -P "$( dirname "$SOURCE" )" && pwd )"
 
 # Set memory
-MEM=6G
+MEM=4G
 
 # Execute
 java -Xmx${MEM} -jar ${DIR}/kanalyze.jar count $@
