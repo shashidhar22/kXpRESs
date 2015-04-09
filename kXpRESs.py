@@ -25,7 +25,6 @@ import tempfile
 from operator import itemgetter
 from pyfasta import Fasta
 from Bio import SeqIO
-#from multiprocessing import Pool
 import multiprocessing
 from collections import Counter
 from itertools import repeat
@@ -36,31 +35,29 @@ from scipy import stats
 global kanalyze
 kanalyze = os.path.abspath(os.path.dirname(__file__))+'/kanalyze-0.9.7/'
 
-
-#transcript_index = dict()
-#transcript_rescue = dict()
-#transcript_kpkm = dict()
-#kmer_set  = set()
-
-def outlier_detection(transcript_index,kmer_count):
+def outlier_detection(transcript_index,kmer_count,transcript_order):
+    logging.info('Detecting outliers')
+    zscore_file = csv.writer(open('zscore1.csv','w'),delimiter='\t')
+    dist_file = csv.writer(open('count_dist1.csv','w'),delimiter='\t')
     for genes in transcript_index:
-#        zscores = stats.zscore(transcript_index[genes])
-        #print(genes, transcript_index[genes])
         genemed = np.median(transcript_index[genes])
-        mad = np.median([(vals - genemed) for vals in transcript_index[genes]])
+        mad = np.median([abs(vals - genemed) for vals in transcript_index[genes]])
+        val_string = ','.join([str(vals) for vals in transcript_index[genes]])
+        dist_file.writerow([transcript_order[genes],str(mad),val_string])
         zscores = [0.6745*(vals - genemed)/mad for vals in transcript_index[genes]]
+        val_string = ','.join([str(vals) for vals in zscores])
+        zscore_file.writerow([transcript_order[genes],val_string])
         for i in range(len(zscores)):
-            if zscores[i] >= 5:
+            if zscores[i] >= 3.5:
                 kmer_count -= transcript_index[genes][i]
                 transcript_index[genes][i] = 0
     return(transcript_index,kmer_count)
 
-def call_expression(kc_chunk,index,transcript_index):
+def call_expression(kc_chunk,index,transcript_index,kmer_med,kmer_mad):
+    logging.info('Calling expression')
     kmer_count = 0
     for lines in open(index):
         line = lines.strip().split('\t')
-        if int(line[0]) == 29:
-            print('check this kmer :'+str(kc_chunk[int(line[0])]))
         if int(line[0]) in kc_chunk:
             kmer_count += kc_chunk[int(line[0])]
             for genes in line[2].split(','):
@@ -90,8 +87,6 @@ def express(kc_chunk,index,transcript_order,transcript_length,klen,seq_len, kmer
                 transcript_rescue[int(line[0])] = [res_trans,kc_chunk[int(line[0])]]
             else:
                 continue
-#    for genes in transcript_index:
-#        transcript_kpkm[genes] = (sum(transcript_index[genes])*10**9)/ float((transcript_length[transcript_order[genes]]-int(klen)+1) * kmer_count * seq_len)
     return (kmer_count)
 
 def get_next(iterator):
@@ -253,13 +248,11 @@ def transcript_list(database, line_count,klen,output,threads,gene):
     logging.info('Indexing reference fasta file')
     fasta_file = SeqIO.parse(open(database),'fasta')
     fasta_list = lazy_function(fasta_file)
-    print(len(fasta_list))
     power = 5
     count = 0
     pool = multiprocessing.Pool(processes=int(threads), initializer=start_kmerize)
     results = pool.map(kmerize,zip(fasta_list,range(len(fasta_list)),repeat(klen),
                        repeat(database),repeat(power),repeat(output)))
-    print(results[0][0])
     for i in range(len(results)):            #redundancy to be rectified
         for k, v in results[i][1].items():
             transcript_length[k] = v
@@ -271,7 +264,6 @@ def transcript_list(database, line_count,klen,output,threads,gene):
     logging.info('Reference indexing completed; \
                   %s kmers indexed to transcripts' %count)
     temp_list = glob.glob(output+'*.tkx')
-    print (temp_list)
     i = 0
     logging.info('Merging index files')
     while len(temp_list) > 1:
@@ -328,17 +320,16 @@ def kxpress(refer, seqfile, loglevel,klen,output,mode,index,db_type,type,seq_len
         logging.info('Parsing input files')
         logging.info('Loading index')
         transcript_length, transcript_order, transcript_index = pickle.load(open(index+'.kxp','rb'))
-        basename = os.path.splitext(os.path.basename(seqfile))[0]
+        basename = os.path.splitext(os.path.basename(seqfile[0]))[0].split('_')[0]
         if type == 'fastq':
-            fastq_parser = open(seqfile) 
+            fastq_parser = open(seqfile[0]) 
             seq_id = fastq_parser.readline()
             seq_len = len(fastq_parser.readline()) -1
             fastq_parser.close()
             logging.info('Kmerizing seqeunce files')
             kmer_file = os.path.abspath(glob.glob(index+'*.mkx')[0])
             #'--kmerfilter=kmerfile:'+kmer_file+';col=1'
-            #'--countfilter=kmercount:c>1'
-            kmerizes = subprocess.Popen([kanalyze+'count','-r','-m','dec','-d',threads,'-k',klen,'-f','fastq','-o',os.path.abspath(os.path.dirname(__file__))+'/'+basename+'.kc',seqfile], stdout=subprocess.PIPE, shell=False)
+            kmerizes = subprocess.Popen([kanalyze+'count','-rcanonical','-m','dec','-d',threads,'-l',threads,'--countfilter=kmercount:c>1','-k',klen,'-f','fastq','-o',os.path.abspath(os.path.dirname(__file__))+'/'+basename+'.kc',' '.join(seqfile)], stdout=subprocess.PIPE, shell=False)
             kmerizes.wait()
             logging.info('Kmers counted')
             kmer_file = os.path.abspath(os.path.dirname(__file__))+'/'+basename+'.kc'
@@ -348,8 +339,13 @@ def kxpress(refer, seqfile, loglevel,klen,output,mode,index,db_type,type,seq_len
         kmer_index = glob.glob(index+'*.mkx')[0]
         logging.info('Merging transcritps and k-mers')
         kmer_count = 0
+        kmer_dist = list()
         for lines in open(kmer_file):
             kmer_count += int(lines.split('\t')[1])
+            kmer_dist.append(int(lines.split('\t')[1]))
+        kmer_med = np.median(kmer_dist)
+        kmer_mad = np.median([(vals - kmer_med) for vals in kmer_dist])
+        kmer_dist = list()
         logging.info('Total kmers found : '+str(kmer_count))
         kmer_csv = open(kmer_file)
         kmer = next(kmer_csv).split('\t')
@@ -361,15 +357,15 @@ def kxpress(refer, seqfile, loglevel,klen,output,mode,index,db_type,type,seq_len
                 try:
                     kmer = next(kmer_csv).split('\t')
                 except StopIteration:
-                    kmer_count += call_expression(kc_chunk,kmer_index,transcript_index)
+                    kmer_count += call_expression(kc_chunk,kmer_index,transcript_index,kmer_med,kmer_mad)
                     break
             else:
                 kc_chunk[int(kmer[0])] = int(kmer[1])
-                kmer_count += call_expression(kc_chunk,kmer_index,transcript_index)
+                kmer_count += call_expression(kc_chunk,kmer_index,transcript_index,kmer_med,kmer_mad)
                 kc_chunk = dict()
         logging.info('Merging complete; Uniquely mapped k-mers:'+str(kmer_count))
         logging.info('Calculating initial kpkm')
-        transcript_index, kmer_count = outlier_detection(transcript_index,kmer_count)
+        transcript_index, kmer_count = outlier_detection(transcript_index,kmer_count,transcript_order)
         transcript_kpkm = dict()
         for genes in transcript_index:
             if transcript_length[transcript_order[genes]] > int(klen):
@@ -377,11 +373,9 @@ def kxpress(refer, seqfile, loglevel,klen,output,mode,index,db_type,type,seq_len
                 transcript_kpkm[genes] = (sum(transcript_index[genes])*(10**9))/ float((transcript_length[transcript_order[genes]]-int(klen)+1) * kmer_count * seq_len)    
             else:
                 transcript_kpkm[genes] = 0.0
-#        kmer_count += rescue(transcript_index, transcript_rescue)
         full_transcripts = 0
         incomplete_transcripts = 0
         unknown_kmers = 0
-        
         for transcripts in transcript_index:
             if transcripts != '':
                 full_transcripts += 1
@@ -395,7 +389,7 @@ def kxpress(refer, seqfile, loglevel,klen,output,mode,index,db_type,type,seq_len
 if __name__ == '__main__':
     parser = argparse.ArgumentParser(prog='kXpRESs')
     parser.add_argument('-r','--reference',dest='refer', type=str, help='Transcript reference file')
-    parser.add_argument('-f','--seqfile',dest='seqfile', type=str, help='Fastq file')
+    parser.add_argument('-f','--seqfile',dest='seqfile', type=str,nargs='+', help='Fastq file')
     parser.add_argument('-k','--kmer_length',dest='klen', type=str, help='Kmer length',default='20')
     parser.add_argument('-o','--output_file',dest='output',type=str, help='Output file path',default='transcripts.kx')
     parser.add_argument('-m','--mode',dest='mode',type=str,choices=['index','express'],help='Enter mode of execution, run index first if the database hasnt been indexed yet')
