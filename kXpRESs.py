@@ -37,13 +37,13 @@ kanalyze = os.path.abspath(os.path.dirname(__file__))+'/kanalyze-0.9.7/'
 
 def outlier_detection(transcript_index,kmer_count,transcript_order):
     logging.info('Detecting outliers')
-    zscore_file = csv.writer(open('zscore1.csv','w'),delimiter='\t')
-    dist_file = csv.writer(open('count_dist1.csv','w'),delimiter='\t')
+    zscore_file = csv.writer(open('zscore_uniq.csv','w'),delimiter='\t')
+    dist_file = csv.writer(open('count_dist_corrected.csv','w'),delimiter='\t')
     for genes in transcript_index:
         genemed = np.median(transcript_index[genes])
         mad = np.median([abs(vals - genemed) for vals in transcript_index[genes]])
         val_string = ','.join([str(vals) for vals in transcript_index[genes]])
-        dist_file.writerow([transcript_order[genes],str(mad),val_string])
+        #dist_file.writerow([transcript_order[genes],str(mad),val_string])
         zscores = [0.6745*(vals - genemed)/mad for vals in transcript_index[genes]]
         val_string = ','.join([str(vals) for vals in zscores])
         zscore_file.writerow([transcript_order[genes],val_string])
@@ -51,6 +51,8 @@ def outlier_detection(transcript_index,kmer_count,transcript_order):
             if zscores[i] >= 3.5:
                 kmer_count -= transcript_index[genes][i]
                 transcript_index[genes][i] = 0
+        val_string = ','.join([str(vals) for vals in transcript_index[genes]])
+        dist_file.writerow([transcript_order[genes],str(mad),val_string])
     return(transcript_index,kmer_count)
 
 def call_expression(kc_chunk,index,transcript_index,kmer_med,kmer_mad):
@@ -58,10 +60,11 @@ def call_expression(kc_chunk,index,transcript_index,kmer_med,kmer_mad):
     kmer_count = 0
     for lines in open(index):
         line = lines.strip().split('\t')
-        if int(line[0]) in kc_chunk:
+        if int(line[0]) in kc_chunk: # and int(line[1]) == 1:
             kmer_count += kc_chunk[int(line[0])]
             for genes in line[2].split(','):
-                transcript_index[int(genes)].append(kc_chunk[int(line[0])]/int(line[1]))
+                gene, pos = genes.split(':')
+                transcript_index[int(gene)][int(pos)-1] = kc_chunk[int(line[0])]/int(line[1])
     return (kmer_count)
 
 def express(kc_chunk,index,transcript_order,transcript_length,klen,seq_len, kmer_count):
@@ -179,8 +182,10 @@ def kmerize(arguments):
         tindex = count + order
         sequence = lines[1]
         header = lines[0]
+        print(header)
         kmer = 0
         bit_counter = 1
+        order_counter = 0
         for nuc in sequence:
             kmer =  kmer << 2         #left shift k-kmer 
             if nuc == 'A':            #add the value of the character using bitwise OR
@@ -195,10 +200,11 @@ def kmerize(arguments):
                 bit_counter = 0
             if bit_counter == klen:   #if length equals k-mer length, store k-mer
                 kmers += 1
+                order_counter += 1
                 try:
-                    transcript_kmers[kmer & mask].append(tindex)  #k-mer to transcript index mapping
+                    transcript_kmers[kmer & mask].append([tindex,order_counter])  #k-mer to transcript index mapping
                 except KeyError:
-                    transcript_kmers[kmer & mask] = [tindex]
+                    transcript_kmers[kmer & mask] = [[tindex,order_counter]]
             else:
                 bit_counter += 1
         logging.debug('Indexing '+header+ '; Line number '+str(tindex))
@@ -206,7 +212,7 @@ def kmerize(arguments):
         transcript_length[header] = len(sequence) #transcript to transcript length mapping
     temp_file = csv.writer(open(output+str(index)+'.tkx','w'),delimiter='\t')
     for values in natsorted(transcript_kmers.keys()):
-        temp_file.writerow([str(values),str(len(transcript_kmers[values])),str(','.join(str(x) for x in transcript_kmers[values]))])
+        temp_file.writerow([str(values),str(len(transcript_kmers[values])),str(','.join(':'.join([str(val) for val in x]) for x in transcript_kmers[values]))])
     return (transcript_order, transcript_length,kmers)
 
 def probe_list(database, line_count, klen):
@@ -258,7 +264,7 @@ def transcript_list(database, line_count,klen,output,threads,gene):
             transcript_length[k] = v
         for k, v in results[i][0].items():
             transcript_order[k] = v
-            transcript_index[k] = list()
+            transcript_index[k] = [0 for i in range(transcript_length[transcript_order[k]] - int(klen) +1)]
         count += results[i][2]
     logging.info('Number of transcripts read : %s ' %len(transcript_length))
     logging.info('Reference indexing completed; \
@@ -352,7 +358,7 @@ def kxpress(refer, seqfile, loglevel,klen,output,mode,index,db_type,type,seq_len
         kmer_count = 0
         kc_chunk = dict()
         while kmer_csv:
-            if len(kc_chunk) <= 10000000:
+            if len(kc_chunk) <= 50000000:
                 kc_chunk[int(kmer[0])] = int(kmer[1])
                 try:
                     kmer = next(kmer_csv).split('\t')
@@ -365,7 +371,11 @@ def kxpress(refer, seqfile, loglevel,klen,output,mode,index,db_type,type,seq_len
                 kc_chunk = dict()
         logging.info('Merging complete; Uniquely mapped k-mers:'+str(kmer_count))
         logging.info('Calculating initial kpkm')
-        transcript_index, kmer_count = outlier_detection(transcript_index,kmer_count,transcript_order)
+        affy_out = csv.writer(open('affy_out.kx','w'),delimiter='\t')
+        affy_out.writerow(['Probe_id','Count'])
+        for lines in transcript_index:
+            affy_out.writerow([lines,sum(transcript_index[lines])])
+        #transcript_index, kmer_count = outlier_detection(transcript_index,kmer_count,transcript_order)
         transcript_kpkm = dict()
         for genes in transcript_index:
             if transcript_length[transcript_order[genes]] > int(klen):
